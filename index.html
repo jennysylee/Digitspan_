@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Digit Span Task</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background-color: #f4f4f4;
+    }
+    #container {
+      margin: 40px auto;
+      width: 800px;
+      background: #ffffff;
+      padding: 30px;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    .hidden {
+      display: none;
+    }
+    .digit-display {
+      font-size: 72px;
+      margin: 40px 0;
+    }
+    .button-row {
+      margin-top: 20px;
+    }
+    button {
+      margin: 5px;
+      padding: 10px 20px;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    #virtual-keypad button {
+      width: 60px;
+      height: 60px;
+      font-size: 24px;
+    }
+    #response-area {
+      margin-top: 20px;
+      font-size: 24px;
+      min-height: 40px;
+    }
+    #feedback {
+      margin-top: 20px;
+      font-size: 28px;
+      font-weight: bold;
+    }
+    #participant-form input {
+      font-size: 18px;
+      padding: 5px;
+      width: 80px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+<div id="container">
+
+  <!-- Participant ID screen -->
+  <div id="participant-screen">
+    <h2>Digit Span Task</h2>
+    <p>Please enter your 3-digit participant number to begin.</p>
+    <div id="participant-form">
+      <label for="participant-id">Participant ID:</label>
+      <input type="text" id="participant-id" maxlength="3" inputmode="numeric" />
+      <br><br>
+      <button id="start-training">Start Task</button>
+    </div>
+    <p id="participant-error" style="color:red;"></p>
+  </div>
+
+  <!-- Instructions / training intro -->
+  <div id="instruction-screen" class="hidden">
+    <h2>Instructions</h2>
+    <p>You will see a sequence of digits, one at a time. Try to remember them in order.</p>
+    <p>After the sequence, click the digits in the same order using the on-screen keypad.</p>
+    <p>If you correctly recall two sequences of the same length, the sequence will become longer.</p>
+    <p>If you make errors twice at the same length, the task will stop.</p>
+    <button id="begin-training">Begin Practice</button>
+  </div>
+
+  <!-- Digit presentation screen -->
+  <div id="digit-screen" class="hidden">
+    <div id="digit-message" class="digit-display"></div>
+  </div>
+
+  <!-- Response screen with virtual keypad -->
+  <div id="response-screen" class="hidden">
+    <h2>Enter the sequence</h2>
+    <div id="response-area"></div>
+    <div id="virtual-keypad">
+      <div>
+        <button data-digit="1">1</button>
+        <button data-digit="2">2</button>
+        <button data-digit="3">3</button>
+      </div>
+      <div>
+        <button data-digit="4">4</button>
+        <button data-digit="5">5</button>
+        <button data-digit="6">6</button>
+      </div>
+      <div>
+        <button data-digit="7">7</button>
+        <button data-digit="8">8</button>
+        <button data-digit="9">9</button>
+      </div>
+      <div>
+        <button data-digit="0">0</button>
+      </div>
+    </div>
+    <div class="button-row">
+      <button id="clear-response">Clear last</button>
+      <button id="submit-response">Continue</button>
+    </div>
+    <div id="feedback"></div>
+  </div>
+
+  <!-- Final feedback / download screen -->
+  <div id="end-screen" class="hidden">
+    <h2>Task finished</h2>
+    <p id="final-score-text"></p>
+    <p id="score-note-text"></p>
+    <div class="button-row">
+      <button id="download-csv">Download results (CSV)</button>
+      <button id="restart-task">Restart experiment</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let participantId = "";
+  let testSpan = 2;      // &testspan
+  let spanCorrect = 0;   // &spancorrect
+  let spanError = 0;     // &spanerror
+  let spanCounter = 0;   // &spancounter
+  let bestSoFar = 0;     // &best_so_far
+  let currentNumberSequence = [];
+  let digitsChosen = [];
+  let trialIndex = 0;
+  let blockNumber = 0;
+  let inTraining = true;
+
+  let trialResults = [];
+
+  const participantScreen = document.getElementById("participant-screen");
+  const instructionScreen = document.getElementById("instruction-screen");
+  const digitScreen = document.getElementById("digit-screen");
+  const responseScreen = document.getElementById("response-screen");
+  const endScreen = document.getElementById("end-screen");
+
+  const participantInput = document.getElementById("participant-id");
+  const participantError = document.getElementById("participant-error");
+  const digitMessage = document.getElementById("digit-message");
+  const responseArea = document.getElementById("response-area");
+  const feedback = document.getElementById("feedback");
+  const finalScoreText = document.getElementById("final-score-text");
+  const scoreNoteText = document.getElementById("score-note-text");
+
+  const startTrainingBtn = document.getElementById("start-training");
+  const beginTrainingBtn = document.getElementById("begin-training");
+  const clearResponseBtn = document.getElementById("clear-response");
+  const submitResponseBtn = document.getElementById("submit-response");
+  const downloadCsvBtn = document.getElementById("download-csv");
+  const restartTaskBtn = document.getElementById("restart-task");
+  const keypad = document.getElementById("virtual-keypad");
+
+  function showScreen(screen) {
+    [participantScreen, instructionScreen, digitScreen, responseScreen, endScreen]
+      .forEach(div => div.classList.add("hidden"));
+    screen.classList.remove("hidden");
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Enforce numeric-only input for participant ID
+  participantInput.addEventListener("input", () => {
+    participantInput.value = participantInput.value.replace(/\D/g, "").slice(0, 3);
+  });
+
+  startTrainingBtn.addEventListener("click", () => {
+    const id = participantInput.value.trim();
+    if (!/^\d{3}$/.test(id)) {
+      participantError.textContent = "Please enter a valid 3-digit numeric ID (e.g., 007, 123).";
+      return;
+    }
+    participantError.textContent = "";
+    participantId = id;
+    showScreen(instructionScreen);
+  });
+
+  beginTrainingBtn.addEventListener("click", () => {
+    inTraining = true;
+    blockNumber = 1;
+    resetSpanVariables();
+    runNextTrial();
+  });
+
+  function resetSpanVariables() {
+    testSpan = 2;
+    spanCorrect = 0;
+    spanError = 0;
+    spanCounter = 0;
+    currentNumberSequence = [];
+    digitsChosen = [];
+  }
+
+  function generateNumberSequence(spanLength) {
+    const digits = [0,1,2,3,4,5,6,7,8,9];
+    const seq = [];
+    for (let i = 0; i < spanLength; i++) {
+      const idx = Math.floor(Math.random() * digits.length);
+      seq.push(digits[idx]);
+    }
+    return seq;
+  }
+
+  async function runNextTrial() {
+    trialIndex += 1;
+    digitsChosen = [];
+    feedback.textContent = "";
+    responseArea.textContent = "";
+
+    currentNumberSequence = generateNumberSequence(testSpan);
+
+    showScreen(digitScreen);
+    digitMessage.textContent = "Memorize digits";
+    await sleep(1000);
+    digitMessage.textContent = "Get ready now!";
+    await sleep(800);
+
+    for (let i = 0; i < currentNumberSequence.length; i++) {
+      digitMessage.textContent = currentNumberSequence[i];
+      await sleep(800);
+      digitMessage.textContent = "";
+      await sleep(200);
+    }
+
+    showScreen(responseScreen);
+  }
+
+  keypad.addEventListener("click", (e) => {
+    const btn = e.target;
+    const digit = btn.getAttribute("data-digit");
+    if (!digit) return;
+    digitsChosen.push(parseInt(digit, 10));
+    responseArea.textContent = digitsChosen.join(" ");
+  });
+
+  clearResponseBtn.addEventListener("click", () => {
+    digitsChosen.pop();
+    responseArea.textContent = digitsChosen.join(" ");
+  });
+
+  submitResponseBtn.addEventListener("click", async () => {
+    if (digitsChosen.length === 0) {
+      feedback.style.color = "red";
+      feedback.textContent = "Please enter the full sequence before continuing.";
+      return;
+    }
+    if (digitsChosen.length !== testSpan) {
+      feedback.style.color = "red";
+      feedback.textContent = "Please enter exactly " + testSpan + " digits.";
+      return;
+    }
+
+    const correct = arraysEqual(digitsChosen, currentNumberSequence);
+    const errorStatus = correct ? 0 : 1;
+
+    trialResults.push({
+      participant_id: participantId,
+      blocknumber: blockNumber,
+      trial_index: trialIndex,
+      best_so_far: bestSoFar,
+      testspan: testSpan,
+      error_status: errorStatus,
+      number_sequence: currentNumberSequence.join(""),
+      digits_chosen: digitsChosen.join("")
+    });
+
+    if (correct) {
+      feedback.style.color = "green";
+      feedback.textContent = "CORRECT";
+      if (spanCounter < 3) {
+        spanCounter += 1;
+      }
+      spanCorrect += 1;
+      if (spanCorrect === 2) {
+        spanCounter = 0;
+        spanError = 0;
+        spanCorrect = 0;
+        bestSoFar = testSpan;
+        testSpan += 1;
+      }
+    } else {
+      feedback.style.color = "red";
+      feedback.textContent = "WRONG";
+      if (spanCounter < 3) {
+        spanCounter += 1;
+      }
+      spanError += 1;
+    }
+
+    await sleep(2000);
+
+    if (inTraining) {
+      inTraining = false;
+      blockNumber = 2;
+      resetSpanVariables();
+      bestSoFar = 0;
+      runNextTrial();
+      return;
+    }
+
+    if (spanError === 2) {
+      endTask();
+      return;
+    }
+    if (testSpan === 10) {
+      endTask();
+      return;
+    }
+
+    runNextTrial();
+  });
+
+  function arraysEqual(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
+  }
+
+  function endTask() {
+    showScreen(endScreen);
+    finalScoreText.textContent =
+      "Your best sequence (digit span): " + bestSoFar;
+    scoreNoteText.textContent =
+      bestSoFar === 0
+        ? "Score 0 means you did not correctly repeat any sequence twice in a row."
+        : "This is the longest sequence you could remember correctly twice in a row.";
+  }
+
+  // CSV escaping: quote fields and escape inner quotes
+  function csvEscape(value) {
+    const str = String(value);
+    const escaped = str.replace(/"/g, '""');
+    return `"${escaped}"`;
+  }
+
+  function downloadCSV() {
+    if (trialResults.length === 0) {
+      alert("No data to download.");
+      return;
+    }
+
+    const headers = [
+      "participant_id",
+      "blocknumber",
+      "trial_index",
+      "best_so_far",
+      "testspan",
+      "error_status",
+      "number_sequence",
+      "digits_chosen"
+    ];
+
+    const headerLine = headers.map(csvEscape).join(",");
+    const rows = trialResults.map(row =>
+      headers.map(h => csvEscape(row[h])).join(",")
+    );
+
+    let csvContent = headerLine + "\n" + rows.join("\n") + "\n";
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const filename = "digit_span_" + participantId + ".csv";
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  downloadCsvBtn.addEventListener("click", downloadCSV);
+
+  restartTaskBtn.addEventListener("click", () => {
+    participantId = "";
+    testSpan = 2;
+    spanCorrect = 0;
+    spanError = 0;
+    spanCounter = 0;
+    bestSoFar = 0;
+    currentNumberSequence = [];
+    digitsChosen = [];
+    trialIndex = 0;
+    blockNumber = 0;
+    inTraining = true;
+    trialResults = [];
+
+    participantInput.value = "";
+    participantError.textContent = "";
+    feedback.textContent = "";
+    responseArea.textContent = "";
+    digitMessage.textContent = "";
+    finalScoreText.textContent = "";
+    scoreNoteText.textContent = "";
+
+    showScreen(participantScreen);
+  });
+</script>
+</body>
+</html>
